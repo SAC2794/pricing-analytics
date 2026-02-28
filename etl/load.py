@@ -53,22 +53,25 @@ def _table_exists(engine, table_name: str) -> bool:
 
 
 def _truncate_or_create(engine, df: pd.DataFrame, table_name: str, chunksize: int):
+    # Azure SQL permite máximo 2100 parámetros por query
+    # Calculamos el chunksize seguro según el número de columnas
+    safe_chunksize = min(chunksize, max(1, 2000 // len(df.columns)))
+
     if _table_exists(engine, table_name):
         with engine.begin() as conn:
-            # DELETE funciona con FK constraints, TRUNCATE no
             conn.execute(text(f"DELETE FROM [{SQL_SCHEMA}].[{table_name}]"))
         df.to_sql(
             name=table_name, con=engine, schema=SQL_SCHEMA,
-            if_exists="append", index=False, chunksize=chunksize, method="multi",
+            if_exists="append", index=False, chunksize=safe_chunksize, method="multi",
         )
     else:
         df.to_sql(
             name=table_name, con=engine, schema=SQL_SCHEMA,
-            if_exists="replace", index=False, chunksize=chunksize, method="multi",
+            if_exists="replace", index=False, chunksize=safe_chunksize, method="multi",
         )
 
 
-def load_to_sql(df: pd.DataFrame, table_name: str, if_exists: str = "replace", chunksize: int = 1000, engine=None):
+def load_to_sql(df: pd.DataFrame, table_name: str, if_exists: str = "replace", chunksize: int = 175, engine=None):
     if df is None or df.empty:
         print(f"  ⚠ Skipped '{table_name}' - DataFrame is empty")
         return
