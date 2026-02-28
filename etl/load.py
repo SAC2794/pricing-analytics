@@ -55,7 +55,8 @@ def _table_exists(engine, table_name: str) -> bool:
 def _truncate_or_create(engine, df: pd.DataFrame, table_name: str, chunksize: int):
     if _table_exists(engine, table_name):
         with engine.begin() as conn:
-            conn.execute(text(f"TRUNCATE TABLE [{SQL_SCHEMA}].[{table_name}]"))
+            # DELETE funciona con FK constraints, TRUNCATE no
+            conn.execute(text(f"DELETE FROM [{SQL_SCHEMA}].[{table_name}]"))
         df.to_sql(
             name=table_name, con=engine, schema=SQL_SCHEMA,
             if_exists="append", index=False, chunksize=chunksize, method="multi",
