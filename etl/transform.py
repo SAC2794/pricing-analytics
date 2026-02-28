@@ -375,10 +375,12 @@ def create_metric_tables(df: pd.DataFrame) -> dict:
             _, bins = pd.qcut(rfm[col], q=5, retbins=True, duplicates="drop")
             n_bins  = len(bins) - 1
             labels  = list(range(n_bins, 0, -1)) if ascending else list(range(1, n_bins + 1))
+            # Cast Categorical → float → Int64 para poder operar con los scores
             rfm[score_col] = pd.qcut(rfm[col], q=5, labels=labels, duplicates="drop")
+            rfm[score_col] = rfm[score_col].astype(float).astype("Int64")
 
         rfm["rfm_score"]   = rfm["r_score"].astype(str) + rfm["f_score"].astype(str) + rfm["m_score"].astype(str)
-        rfm["rfm_numeric"] = rfm[["r_score","f_score","m_score"]].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+        rfm["rfm_numeric"] = rfm["r_score"].astype(float) + rfm["f_score"].astype(float) + rfm["m_score"].astype(float)
 
         # Simple segment label
         def _segment(score):
