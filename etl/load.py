@@ -68,12 +68,14 @@ def _truncate_or_create(engine, df: pd.DataFrame, table_name: str, chunksize: in
         )
 
 
-def load_to_sql(df: pd.DataFrame, table_name: str, if_exists: str = "replace", chunksize: int = 1000):
+def load_to_sql(df: pd.DataFrame, table_name: str, if_exists: str = "replace", chunksize: int = 1000, engine=None):
     if df is None or df.empty:
         print(f"  ⚠ Skipped '{table_name}' - DataFrame is empty")
         return
 
-    engine = get_engine()
+    if engine is None:
+        engine = get_engine()
+
     ensure_schema_exists(engine)
     df = df.where(pd.notnull(df), other=None)
     _truncate_or_create(engine, df, table_name, chunksize)

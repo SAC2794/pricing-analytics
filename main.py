@@ -10,7 +10,7 @@
 #   4. Build dimension tables          → Power BI
 #   5. Build fact table                → Power BI
 #   6. Build metrics tables            → Streamlit + ML models
-#   7. Load everything to Azure SQL
+#   7. Load everything to Azure SQL (engine creado una sola vez)
 # ─────────────────────────────────────────────────────────────────────────────
 
 from etl.extract import extract_csv_from_datalake
@@ -23,7 +23,7 @@ from etl.transform import (
     create_fact_table,
     create_metric_tables,
 )
-from etl.load import load_to_sql
+from etl.load import load_to_sql, get_engine
 from config import (
     DIM_DATE_TABLE, DIM_PRODUCT_TABLE, DIM_STORE_TABLE, DIM_EXTERNAL_TABLE,
     FACT_SALES_TABLE,
@@ -52,7 +52,7 @@ def run_pipeline(file_name: str = "retail_store_inventory.csv"):
 
         # ── 4. Build dimensions ───────────────────────────────────────────────
         print("\n🔹 [5/7] Building dimension tables...")
-        dim_date                  = create_dim_date(df)
+        dim_date                         = create_dim_date(df)
         dim_product, dim_store, dim_external = create_dimensions(df)
 
         # ── 5. Build fact table ───────────────────────────────────────────────
@@ -64,30 +64,31 @@ def run_pipeline(file_name: str = "retail_store_inventory.csv"):
         metrics = create_metric_tables(df)
 
         # ── 7. Load to Azure SQL ──────────────────────────────────────────────
+        # Engine creado una sola vez → token no expira entre tablas
+        print("\n🔹 Connecting to Azure SQL...")
+        engine = get_engine()
+
         print("\n🔹 Loading dimension tables to Azure SQL...")
-        load_to_sql(dim_date,     DIM_DATE_TABLE)
-        load_to_sql(dim_product,  DIM_PRODUCT_TABLE)
-        load_to_sql(dim_store,    DIM_STORE_TABLE)
-        load_to_sql(dim_external, DIM_EXTERNAL_TABLE)
+        load_to_sql(dim_date,     DIM_DATE_TABLE,     engine=engine)
+        load_to_sql(dim_product,  DIM_PRODUCT_TABLE,  engine=engine)
+        load_to_sql(dim_store,    DIM_STORE_TABLE,    engine=engine)
+        load_to_sql(dim_external, DIM_EXTERNAL_TABLE, engine=engine)
 
         print("\n🔹 Loading fact table to Azure SQL...")
-        load_to_sql(fact_sales, FACT_SALES_TABLE)
+        load_to_sql(fact_sales, FACT_SALES_TABLE, engine=engine)
 
         print("\n🔹 Loading metrics tables to Azure SQL...")
-        load_to_sql(metrics["metrics_pricing"],               METRICS_PRICING_TABLE)
-        load_to_sql(metrics["metrics_inventory"],             METRICS_INVENTORY_TABLE)
-        load_to_sql(metrics["metrics_customer_segmentation"], METRICS_CUSTOMER_TABLE)
-        load_to_sql(metrics["metrics_forecast_features"],     METRICS_FORECAST_TABLE)
+        load_to_sql(metrics["metrics_pricing"],               METRICS_PRICING_TABLE,   engine=engine)
+        load_to_sql(metrics["metrics_inventory"],             METRICS_INVENTORY_TABLE, engine=engine)
+        load_to_sql(metrics["metrics_customer_segmentation"], METRICS_CUSTOMER_TABLE,  engine=engine)
+        load_to_sql(metrics["metrics_forecast_features"],     METRICS_FORECAST_TABLE,  engine=engine)
 
         print("\n✅ Pipeline completed successfully!\n")
 
     except Exception as exc:
         print(f"\n❌ Pipeline failed: {exc}")
-        raise   # re-raise so Azure Functions marks the execution as failed
+        raise
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Local execution
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     run_pipeline("retail_store_inventory.csv")
