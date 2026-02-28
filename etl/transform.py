@@ -67,6 +67,15 @@ def convert_types(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
+    # Aliases: normaliza nombres alternativos del dataset real
+    aliases = {
+        "competitor_pricing": "competitor_price",
+        "seasonality":        "seasonality_factor",
+    }
+    for old, new in aliases.items():
+        if old in df.columns and new not in df.columns:
+            df.rename(columns={old: new}, inplace=True)
+
     # Float columns
     float_cols = [
         "price", "cost", "competitor_price", "discount",
@@ -356,12 +365,17 @@ def create_metric_tables(df: pd.DataFrame) -> dict:
         )
 
         # RFM scores (quintiles 1–5)
+        # duplicates="drop" puede reducir el número real de bins,
+        # por eso calculamos los labels dinámicamente según los bins resultantes.
         for col, score_col, ascending in [
             ("recency_days",   "r_score", True),   # lower recency = better
             ("frequency",      "f_score", False),
             ("monetary_total", "m_score", False),
         ]:
-            rfm[score_col] = pd.qcut(rfm[col], q=5, labels=[5,4,3,2,1] if ascending else [1,2,3,4,5], duplicates="drop")
+            _, bins = pd.qcut(rfm[col], q=5, retbins=True, duplicates="drop")
+            n_bins  = len(bins) - 1
+            labels  = list(range(n_bins, 0, -1)) if ascending else list(range(1, n_bins + 1))
+            rfm[score_col] = pd.qcut(rfm[col], q=5, labels=labels, duplicates="drop")
 
         rfm["rfm_score"]   = rfm["r_score"].astype(str) + rfm["f_score"].astype(str) + rfm["m_score"].astype(str)
         rfm["rfm_numeric"] = rfm[["r_score","f_score","m_score"]].apply(pd.to_numeric, errors="coerce").sum(axis=1)
