@@ -4,7 +4,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import struct
 import urllib
-import socket
 import pandas as pd
 
 from sqlalchemy import create_engine, text
@@ -18,28 +17,12 @@ def get_engine():
     token_bytes  = token_obj.token.encode("utf-16-le")
     token_struct = struct.pack("<I", len(token_bytes)) + token_bytes
 
-    # Resolvemos el hostname manualmente desde Python (usa el DNS de Windows,
-    # no el resolver interno del ODBC Driver que falla en Git Bash)
-    try:
-        resolved_ip = socket.getaddrinfo(AZURE_SQL_SERVER, 1433)[0][4][0]
-        print(f"  DNS resolved: {AZURE_SQL_SERVER} → {resolved_ip}")
-        server_str = resolved_ip
-        trust_cert = "yes"
-        host_in_cert = f"HostNameInCertificate={AZURE_SQL_SERVER};"
-    except socket.gaierror:
-        # Fallback: usar hostname directo
-        print(f"  DNS fallback: using hostname directly")
-        server_str = AZURE_SQL_SERVER
-        trust_cert = "no"
-        host_in_cert = ""
-
     odbc_str = (
         f"Driver={{{AZURE_SQL_DRIVER}}};"
-        f"Server=tcp:{server_str},1433;"
+        f"Server=tcp:{AZURE_SQL_SERVER},1433;"
         f"Database={AZURE_SQL_DATABASE};"
         f"Encrypt=yes;"
-        f"TrustServerCertificate={trust_cert};"
-        f"{host_in_cert}"
+        f"TrustServerCertificate=no;"
         f"Connection Timeout=30;"
     )
 
