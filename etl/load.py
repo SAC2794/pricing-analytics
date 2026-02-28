@@ -1,14 +1,10 @@
 # etl/load.py
-# ─────────────────────────────────────────────────────────────────────────────
-# Loads DataFrames into Azure SQL Database using Managed Identity (no password).
-# Uses pyodbc + SQLAlchemy with token-based authentication.
-# ─────────────────────────────────────────────────────────────────────────────
-
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import struct
 import urllib
+import socket
 import pandas as pd
 
 from sqlalchemy import create_engine, text
@@ -16,28 +12,34 @@ from azure.identity import DefaultAzureCredential
 from config import AZURE_SQL_SERVER, AZURE_SQL_DATABASE, AZURE_SQL_DRIVER, SQL_SCHEMA
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Engine factory
-# ─────────────────────────────────────────────────────────────────────────────
-
 def get_engine():
     credential   = DefaultAzureCredential()
     token_obj    = credential.get_token("https://database.windows.net/.default")
-
     token_bytes  = token_obj.token.encode("utf-16-le")
     token_struct = struct.pack("<I", len(token_bytes)) + token_bytes
 
-    # IP directa para evitar que el ODBC Driver falle resolviendo DNS
-    # Si la IP cambia, actualizar con: nslookup sql-pricing-analytics.database.windows.net
-    AZURE_SQL_IP = "20.150.241.128"
+    # Resolvemos el hostname manualmente desde Python (usa el DNS de Windows,
+    # no el resolver interno del ODBC Driver que falla en Git Bash)
+    try:
+        resolved_ip = socket.getaddrinfo(AZURE_SQL_SERVER, 1433)[0][4][0]
+        print(f"  DNS resolved: {AZURE_SQL_SERVER} → {resolved_ip}")
+        server_str = resolved_ip
+        trust_cert = "yes"
+        host_in_cert = f"HostNameInCertificate={AZURE_SQL_SERVER};"
+    except socket.gaierror:
+        # Fallback: usar hostname directo
+        print(f"  DNS fallback: using hostname directly")
+        server_str = AZURE_SQL_SERVER
+        trust_cert = "no"
+        host_in_cert = ""
 
     odbc_str = (
         f"Driver={{{AZURE_SQL_DRIVER}}};"
-        f"Server=tcp:{AZURE_SQL_IP},1433;"
+        f"Server=tcp:{server_str},1433;"
         f"Database={AZURE_SQL_DATABASE};"
         f"Encrypt=yes;"
-        f"TrustServerCertificate=yes;"
-        f"HostNameInCertificate={AZURE_SQL_SERVER};"
+        f"TrustServerCertificate={trust_cert};"
+        f"{host_in_cert}"
         f"Connection Timeout=30;"
     )
 
@@ -49,10 +51,6 @@ def get_engine():
     )
     return engine
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Schema bootstrap
-# ─────────────────────────────────────────────────────────────────────────────
 
 def ensure_schema_exists(engine):
     with engine.begin() as conn:
@@ -85,10 +83,6 @@ def _truncate_or_create(engine, df: pd.DataFrame, table_name: str, chunksize: in
             if_exists="replace", index=False, chunksize=chunksize, method="multi",
         )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Core loader
-# ─────────────────────────────────────────────────────────────────────────────
 
 def load_to_sql(df: pd.DataFrame, table_name: str, if_exists: str = "replace", chunksize: int = 1000):
     if df is None or df.empty:
