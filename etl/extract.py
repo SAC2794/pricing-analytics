@@ -1,59 +1,57 @@
 # etl/extract.py
+# ─────────────────────────────────────────────────────────────────────────────
+# Extracts the raw CSV from Azure Blob Storage using Managed Identity.
+# No connection strings or secrets required.
+# ─────────────────────────────────────────────────────────────────────────────
 
+import sys
 import os
-from dotenv import load_dotenv
-from azure.identity import ClientSecretCredential
-from azure.storage.blob import BlobServiceClient
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pandas as pd
 from io import BytesIO
+from azure.identity import DefaultAzureCredential
+from azure.storage.blob import BlobServiceClient
+from config import AZURE_STORAGE_ACCOUNT, AZURE_CONTAINER_NAME
 
-load_dotenv()
 
-def get_blob_service_client():
-    try:
-        credential = ClientSecretCredential(
-            tenant_id=os.getenv("AZURE_TENANT_ID"),
-            client_id=os.getenv("AZURE_CLIENT_ID"),
-            client_secret=os.getenv("AZURE_CLIENT_SECRET")
-        )
+def get_blob_service_client() -> BlobServiceClient:
+    """
+    Creates a BlobServiceClient authenticated with Managed Identity.
+    Works both locally (via az login / env vars) and inside Azure Functions.
+    """
+    credential   = DefaultAzureCredential()
+    account_url  = f"https://{AZURE_STORAGE_ACCOUNT}.blob.core.windows.net"
+    return BlobServiceClient(account_url=account_url, credential=credential)
 
-        account_url = f"https://{os.getenv('AZURE_STORAGE_ACCOUNT')}.blob.core.windows.net"
-        client = BlobServiceClient(account_url=account_url, credential=credential)
-        print("[✅] Conexión al Storage exitosa")
-        return client
-    except Exception as e:
-        print(f"[❌] Error conectando al Storage: {e}")
-        raise e
 
 def extract_csv_from_datalake(file_name: str) -> pd.DataFrame:
-    try:
-        blob_service_client = get_blob_service_client()
-        container_name = os.getenv("AZURE_CONTAINER_NAME")
-        container_client = blob_service_client.get_container_client(container_name)
+    """
+    Downloads a CSV blob from the 'raw' container and returns a DataFrame.
 
-        # Verificar si el blob existe
-        if not container_client.exists():
-            raise Exception(f"Contenedor '{container_name}' no existe o no tienes permisos")
-        
-        blob_client = container_client.get_blob_client(file_name)
-        if not blob_client.exists():
-            raise Exception(f"Archivo '{file_name}' no existe en el contenedor '{container_name}'")
+    Parameters
+    ----------
+    file_name : str
+        Name of the blob, e.g. 'retail_store_inventory.csv'
 
-        stream = BytesIO()
-        blob_data = blob_client.download_blob()
-        blob_data.readinto(stream)
-        stream.seek(0)
+    Returns
+    -------
+    pd.DataFrame
+    """
+    if not AZURE_CONTAINER_NAME:
+        raise ValueError("AZURE_CONTAINER_NAME is not set in config.py")
 
-        df = pd.read_csv(stream)
-        print(f"[✅] CSV '{file_name}' cargado correctamente con {df.shape[0]} filas y {df.shape[1]} columnas")
-        return df
+    client      = get_blob_service_client()
+    blob_client = client.get_blob_client(
+        container=AZURE_CONTAINER_NAME,
+        blob=file_name
+    )
 
-    except Exception as e:
-        print(f"[❌] Error extrayendo CSV: {e}")
-        raise e
+    stream    = BytesIO()
+    blob_data = blob_client.download_blob()
+    blob_data.readinto(stream)
+    stream.seek(0)
 
-if __name__ == "__main__":
-    # Cambia el nombre de tu archivo real aquí
-    file_name = "sales_data.csv"
-    df = extract_csv_from_datalake(file_name)
-    print(df.head())
+    df = pd.read_csv(stream)
+    print(f"  ✔ Extracted {len(df):,} rows × {len(df.columns)} columns from '{file_name}'")
+    return df
