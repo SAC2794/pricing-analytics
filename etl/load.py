@@ -9,12 +9,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import struct
 import urllib
+import pandas as pd
 
 from sqlalchemy import create_engine, text
 from azure.identity import DefaultAzureCredential
 from config import AZURE_SQL_SERVER, AZURE_SQL_DATABASE, AZURE_SQL_DRIVER, SQL_SCHEMA
-
-import pandas as pd
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -22,23 +21,23 @@ import pandas as pd
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_engine():
-    """
-    Builds a SQLAlchemy engine authenticated with Azure Managed Identity.
-    The access token is injected via ODBC attribute 1256 (SQL_COPT_SS_ACCESS_TOKEN).
-    """
-    credential = DefaultAzureCredential()
-    token_obj  = credential.get_token("https://database.windows.net/.default")
+    credential   = DefaultAzureCredential()
+    token_obj    = credential.get_token("https://database.windows.net/.default")
 
-    # Convert token string to the UTF-16LE byte structure expected by ODBC Driver 17/18
-    token_bytes = token_obj.token.encode("utf-16-le")
+    token_bytes  = token_obj.token.encode("utf-16-le")
     token_struct = struct.pack("<I", len(token_bytes)) + token_bytes
+
+    # IP directa para evitar que el ODBC Driver falle resolviendo DNS
+    # Si la IP cambia, actualizar con: nslookup sql-pricing-analytics.database.windows.net
+    AZURE_SQL_IP = "20.150.241.128"
 
     odbc_str = (
         f"Driver={{{AZURE_SQL_DRIVER}}};"
-        f"Server=tcp:{AZURE_SQL_SERVER},1433;"
+        f"Server=tcp:{AZURE_SQL_IP},1433;"
         f"Database={AZURE_SQL_DATABASE};"
         f"Encrypt=yes;"
-        f"TrustServerCertificate=no;"
+        f"TrustServerCertificate=yes;"
+        f"HostNameInCertificate={AZURE_SQL_SERVER};"
         f"Connection Timeout=30;"
     )
 
@@ -46,7 +45,7 @@ def get_engine():
     engine = create_engine(
         f"mssql+pyodbc:///?odbc_connect={params}",
         connect_args={"attrs_before": {1256: token_struct}},
-        fast_executemany=True,   # much faster bulk inserts
+        fast_executemany=True,
     )
     return engine
 
@@ -56,49 +55,48 @@ def get_engine():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ensure_schema_exists(engine):
-    """Creates the 'dw' schema if it doesn't already exist."""
     with engine.begin() as conn:
-        conn.execute(text(f"IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = '{SQL_SCHEMA}') "
-                          f"EXEC('CREATE SCHEMA {SQL_SCHEMA}')"))
+        conn.execute(text(
+            f"IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = '{SQL_SCHEMA}') "
+            f"EXEC('CREATE SCHEMA {SQL_SCHEMA}')"
+        ))
+
+
+def _table_exists(engine, table_name: str) -> bool:
+    with engine.connect() as conn:
+        result = conn.execute(text(
+            f"SELECT 1 FROM INFORMATION_SCHEMA.TABLES "
+            f"WHERE TABLE_SCHEMA = '{SQL_SCHEMA}' AND TABLE_NAME = '{table_name}'"
+        ))
+        return result.fetchone() is not None
+
+
+def _truncate_or_create(engine, df: pd.DataFrame, table_name: str, chunksize: int):
+    if _table_exists(engine, table_name):
+        with engine.begin() as conn:
+            conn.execute(text(f"TRUNCATE TABLE [{SQL_SCHEMA}].[{table_name}]"))
+        df.to_sql(
+            name=table_name, con=engine, schema=SQL_SCHEMA,
+            if_exists="append", index=False, chunksize=chunksize, method="multi",
+        )
+    else:
+        df.to_sql(
+            name=table_name, con=engine, schema=SQL_SCHEMA,
+            if_exists="replace", index=False, chunksize=chunksize, method="multi",
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Core loader
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_to_sql(
-    df: pd.DataFrame,
-    table_name: str,
-    if_exists: str = "replace",
-    chunksize: int = 1000,
-):
-    """
-    Writes a DataFrame to Azure SQL.
-
-    Parameters
-    ----------
-    df         : DataFrame to load
-    table_name : Target table name (without schema prefix)
-    if_exists  : 'replace' (default) drops & recreates. Use 'append' for incremental loads.
-    chunksize  : Rows per INSERT batch (default 1 000)
-    """
+def load_to_sql(df: pd.DataFrame, table_name: str, if_exists: str = "replace", chunksize: int = 1000):
     if df is None or df.empty:
-        print(f"  ⚠ Skipped '{table_name}' – DataFrame is empty")
+        print(f"  ⚠ Skipped '{table_name}' - DataFrame is empty")
         return
 
     engine = get_engine()
     ensure_schema_exists(engine)
-
-    # Convert pandas NA types to Python None so pyodbc handles them correctly
     df = df.where(pd.notnull(df), other=None)
-
-    df.to_sql(
-        name=table_name,
-        con=engine,
-        schema=SQL_SCHEMA,
-        if_exists=if_exists,
-        index=False,
-        chunksize=chunksize,
-        method="multi",
-    )
-    print(f"  ✔ Loaded {len(df):,} rows → {SQL_SCHEMA}.{table_name}  (if_exists='{if_exists}')")
+    _truncate_or_create(engine, df, table_name, chunksize)
+    print(f"  ✔ Loaded {len(df):,} rows → [{SQL_SCHEMA}].[{table_name}]")
