@@ -74,6 +74,10 @@ def _truncate_or_create(engine, df: pd.DataFrame, table_name: str, chunksize: in
 def load_to_sql(df: pd.DataFrame, table_name: str, if_exists: str = "replace", chunksize: int = 175, engine=None):
     if df is None or df.empty:
         print(f"  ⚠ Skipped '{table_name}' - DataFrame is empty")
+        # Limpiar cualquier transacción pendiente en el engine compartido
+        if engine is not None:
+            with engine.connect() as conn:
+                conn.rollback()
         return
 
     if engine is None:
