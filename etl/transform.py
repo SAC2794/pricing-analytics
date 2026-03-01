@@ -117,8 +117,12 @@ def create_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
     if "net_price" in df.columns and "units_sold" in df.columns:
         df["revenue"] = df["net_price"] * df["units_sold"].fillna(0)
 
-    # Gross margin (if cost available)
-    if "cost" in df.columns and "net_price" in df.columns:
+    # Cost: usa la columna real si existe, si no la estima con margen típico de retail (40%)
+    if "cost" not in df.columns and "price" in df.columns:
+        df["cost"] = df["price"] * 0.60  # estimación: costo = 60% del precio lista
+
+    # Gross margin
+    if "net_price" in df.columns and "cost" in df.columns:
         df["gross_margin"] = df["net_price"] - df["cost"]
         df["gross_margin_pct"] = np.where(
             df["net_price"] > 0,
